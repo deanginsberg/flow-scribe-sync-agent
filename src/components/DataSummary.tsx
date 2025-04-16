@@ -16,6 +16,11 @@ interface DataCounts {
   lastUpdated: Date | null;
 }
 
+// Define a type for Airtable API responses
+interface AirtableResponse {
+  records: Array<any>;
+}
+
 const DataSummary = ({ airtableApiKey, airtableBaseId }: DataSummaryProps) => {
   const [dataCounts, setDataCounts] = useState<DataCounts>({
     flows: 0,
@@ -44,13 +49,13 @@ const DataSummary = ({ airtableApiKey, airtableBaseId }: DataSummaryProps) => {
 
         // Get counts from each table
         const flowsResponse = await airtableClient.getRecords('Flows', { maxRecords: 1 })
-          .catch(() => ({ records: [] }));
+          .catch(() => ({ records: [] })) as AirtableResponse;
         
         const messagesResponse = await airtableClient.getRecords('Flow Messages', { maxRecords: 1 })
-          .catch(() => ({ records: [] }));
+          .catch(() => ({ records: [] })) as AirtableResponse;
         
         const metricsResponse = await airtableClient.getRecords('Metrics', { maxRecords: 1 })
-          .catch(() => ({ records: [] }));
+          .catch(() => ({ records: [] })) as AirtableResponse;
 
         // Update the data counts
         setDataCounts({
