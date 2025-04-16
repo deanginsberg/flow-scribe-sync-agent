@@ -1,16 +1,20 @@
 
 import React, { useState } from 'react';
 import { Button } from '@/components/ui/button';
-import { Card, CardContent, CardDescription, CardFooter, CardHeader, CardTitle } from '@/components/ui/card';
+import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card';
 import { Badge } from '@/components/ui/badge';
 import { ScrollArea } from '@/components/ui/scroll-area';
 import { RefreshCw, CheckCircle, XCircle, AlertCircle } from 'lucide-react';
 import { formatDistanceToNow } from 'date-fns';
 import { syncKlaviyoToAirtable } from '@/lib/syncEngine';
 import { toast } from 'sonner';
+import KlaviyoApiClient from '@/lib/klaviyoAPI';
+import AirtableApiClient from '@/lib/airtableAPI';
 
 interface SyncDashboardProps {
-  apiKey: string;
+  klaviyoApiKey: string;
+  airtableApiKey: string;
+  airtableBaseId: string;
 }
 
 interface LogEntry {
@@ -20,8 +24,9 @@ interface LogEntry {
   type: 'info' | 'success' | 'error' | 'warning';
 }
 
-const SyncDashboard = ({ apiKey }: SyncDashboardProps) => {
+const SyncDashboard = ({ klaviyoApiKey, airtableApiKey, airtableBaseId }: SyncDashboardProps) => {
   const [isSyncing, setIsSyncing] = useState(false);
+  const [isTestingKlaviyo, setIsTestingKlaviyo] = useState(false);
   const [lastSyncTime, setLastSyncTime] = useState<Date | null>(null);
   const [logs, setLogs] = useState<LogEntry[]>([]);
 
@@ -35,9 +40,49 @@ const SyncDashboard = ({ apiKey }: SyncDashboardProps) => {
     setLogs(prev => [newLog, ...prev]);
   };
 
+  const testKlaviyoConnection = async () => {
+    if (!klaviyoApiKey) {
+      toast.error("Please enter your Klaviyo API Key before testing");
+      return;
+    }
+
+    setIsTestingKlaviyo(true);
+    addLog("Testing Klaviyo API connection...", "info");
+
+    try {
+      const klaviyoClient = new KlaviyoApiClient({ apiKey: klaviyoApiKey });
+      await klaviyoClient.testConnection();
+      
+      addLog("Klaviyo API connection successful", "success");
+      toast.success("Successfully connected to Klaviyo API");
+    } catch (error) {
+      console.error("Klaviyo connection error:", error);
+      
+      if (error instanceof Error) {
+        if (error.message.includes("401")) {
+          addLog("Invalid Klaviyo API Key", "error");
+          toast.error("Invalid Klaviyo API Key");
+        } else {
+          addLog(`Klaviyo connection error: ${error.message}`, "error");
+          toast.error(`Klaviyo connection error: ${error.message}`);
+        }
+      } else {
+        addLog("Unknown error connecting to Klaviyo", "error");
+        toast.error("Unknown error connecting to Klaviyo");
+      }
+    } finally {
+      setIsTestingKlaviyo(false);
+    }
+  };
+
   const handleSync = async () => {
-    if (!apiKey) {
+    if (!klaviyoApiKey) {
       toast.error("Please enter your Klaviyo API Key before syncing");
+      return;
+    }
+
+    if (!airtableApiKey || !airtableBaseId) {
+      toast.error("Please configure your Airtable API Key and Base ID before syncing");
       return;
     }
 
@@ -45,39 +90,43 @@ const SyncDashboard = ({ apiKey }: SyncDashboardProps) => {
     addLog("Starting Klaviyo to Airtable sync...", "info");
 
     try {
-      // Add a small delay to simulate the sync process
-      await new Promise(resolve => setTimeout(resolve, 2000));
+      // Test both connections before syncing
+      const klaviyoClient = new KlaviyoApiClient({ apiKey: klaviyoApiKey });
+      const airtableClient = new AirtableApiClient({ 
+        apiKey: airtableApiKey, 
+        baseId: airtableBaseId 
+      });
+
+      // First test Klaviyo connection
+      addLog("Verifying Klaviyo API connection...", "info");
+      await klaviyoClient.testConnection();
+      addLog("Klaviyo API connection verified", "success");
+
+      // Then test Airtable connection
+      addLog("Verifying Airtable API connection...", "info");
+      await airtableClient.testConnection();
+      addLog("Airtable API connection verified", "success");
+
+      // Begin the sync process
+      addLog("Fetching data from Klaviyo...", "info");
       
-      addLog("Successfully fetched 12 flows from Klaviyo", "success");
-      await new Promise(resolve => setTimeout(resolve, 1000));
-      
-      addLog("Fetching flow actions and messages...", "info");
-      await new Promise(resolve => setTimeout(resolve, 1500));
-      
-      addLog("Successfully fetched 47 messages across all flows", "success");
-      await new Promise(resolve => setTimeout(resolve, 1000));
-      
-      addLog("Fetching metrics data...", "info");
-      await new Promise(resolve => setTimeout(resolve, 1500));
-      
-      addLog("Successfully fetched 24 metrics", "success");
-      await new Promise(resolve => setTimeout(resolve, 1000));
-      
-      addLog("Preparing data for Airtable sync...", "info");
-      await new Promise(resolve => setTimeout(resolve, 1500));
-      
-      addLog("Creating or updating records in Airtable...", "info");
-      await new Promise(resolve => setTimeout(resolve, 2000));
-      
-      addLog("Sync complete! All data has been successfully transferred to Airtable.", "success");
+      // Use the syncEngine to perform the actual sync
+      await syncKlaviyoToAirtable(klaviyoApiKey, airtableApiKey, airtableBaseId);
       
       // Update last sync time
       setLastSyncTime(new Date());
+      addLog("Sync complete! All data has been successfully transferred to Airtable.", "success");
       toast.success("Sync completed successfully");
     } catch (error) {
       console.error("Sync error:", error);
-      addLog(`Sync failed: ${error instanceof Error ? error.message : "Unknown error"}`, "error");
-      toast.error("Sync failed. Check logs for details.");
+      
+      if (error instanceof Error) {
+        addLog(`Sync failed: ${error.message}`, "error");
+        toast.error(`Sync failed: ${error.message}`);
+      } else {
+        addLog("Sync failed: Unknown error", "error");
+        toast.error("Sync failed. Check logs for details.");
+      }
     } finally {
       setIsSyncing(false);
     }
@@ -112,6 +161,8 @@ const SyncDashboard = ({ apiKey }: SyncDashboardProps) => {
     }
   };
 
+  const isSyncButtonDisabled = isSyncing || !klaviyoApiKey || !airtableApiKey || !airtableBaseId;
+
   return (
     <div className="space-y-6">
       <Card>
@@ -125,32 +176,57 @@ const SyncDashboard = ({ apiKey }: SyncDashboardProps) => {
           </CardDescription>
         </CardHeader>
         <CardContent>
-          <div className="flex items-center justify-between">
-            <div>
-              <p className="text-sm font-medium">Last Sync:</p>
-              <p className="text-sm text-muted-foreground">
-                {lastSyncTime 
-                  ? `${formatDistanceToNow(lastSyncTime)} ago (${lastSyncTime.toLocaleString()})` 
-                  : "Never synced"}
-              </p>
+          <div className="flex flex-col space-y-4">
+            <div className="flex items-center justify-between">
+              <div>
+                <p className="text-sm font-medium">Last Sync:</p>
+                <p className="text-sm text-muted-foreground">
+                  {lastSyncTime 
+                    ? `${formatDistanceToNow(lastSyncTime)} ago (${lastSyncTime.toLocaleString()})` 
+                    : "Never synced"}
+                </p>
+              </div>
+              
+              <div className="flex flex-col sm:flex-row gap-2">
+                <Button 
+                  onClick={testKlaviyoConnection} 
+                  variant="outline"
+                  disabled={isTestingKlaviyo || !klaviyoApiKey}
+                  className="whitespace-nowrap"
+                >
+                  {isTestingKlaviyo ? "Testing..." : "Test Klaviyo Connection"}
+                </Button>
+                
+                <Button 
+                  onClick={handleSync} 
+                  disabled={isSyncButtonDisabled}
+                  className="bg-accent hover:bg-accent/90 whitespace-nowrap"
+                >
+                  {isSyncing ? (
+                    <>
+                      <RefreshCw className="mr-2 h-4 w-4 animate-spin" />
+                      Syncing...
+                    </>
+                  ) : (
+                    <>
+                      <RefreshCw className="mr-2 h-4 w-4" />
+                      Sync Now
+                    </>
+                  )}
+                </Button>
+              </div>
             </div>
-            <Button 
-              onClick={handleSync} 
-              disabled={isSyncing || !apiKey}
-              className="bg-accent hover:bg-accent/90"
-            >
-              {isSyncing ? (
-                <>
-                  <RefreshCw className="mr-2 h-4 w-4 animate-spin" />
-                  Syncing...
-                </>
-              ) : (
-                <>
-                  <RefreshCw className="mr-2 h-4 w-4" />
-                  Sync Now
-                </>
-              )}
-            </Button>
+            
+            {isSyncButtonDisabled && !isSyncing && (
+              <div className="text-sm text-amber-500 bg-amber-50 p-2 rounded border border-amber-200">
+                <AlertCircle className="inline-block h-4 w-4 mr-1 mb-0.5" />
+                {!klaviyoApiKey 
+                  ? "Enter Klaviyo API Key to enable sync" 
+                  : (!airtableApiKey || !airtableBaseId) 
+                    ? "Complete Airtable configuration to enable sync" 
+                    : ""}
+              </div>
+            )}
           </div>
         </CardContent>
       </Card>

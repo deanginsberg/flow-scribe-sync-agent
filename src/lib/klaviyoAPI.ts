@@ -32,37 +32,80 @@ export class KlaviyoApiClient {
 
     if (!response.ok) {
       const error = await response.json().catch(() => ({}));
-      throw new Error(`API Error: ${response.status} - ${error.message || response.statusText}`);
+      const errorMessage = error.detail || error.message || response.statusText;
+      const errorCode = response.status;
+      throw new Error(`Klaviyo API Error: ${errorCode} - ${errorMessage}`);
     }
 
     return await response.json() as T;
   }
 
+  async testConnection() {
+    try {
+      // Try to get account info to test connection
+      const response = await fetch(`${this.baseUrl}/accounts/`, {
+        headers: {
+          'Accept': 'application/json',
+          'Authorization': `Klaviyo-API-Key ${this.apiKey}`,
+          'revision': '2023-10-15',
+        },
+      });
+
+      if (!response.ok) {
+        const error = await response.json().catch(() => ({}));
+        throw new Error(`${response.status} - ${error.detail || error.message || response.statusText}`);
+      }
+
+      return await response.json();
+    } catch (error) {
+      console.error("Klaviyo connection test failed:", error);
+      throw error;
+    }
+  }
+
   async getFlows(page?: number, pageSize = 50) {
-    // This would be a real implementation in a production app
-    // For this demo, we'll simulate a successful response
-    console.log(`Get flows called with page=${page}, pageSize=${pageSize}`);
-    return { data: [], links: { next: null } };
+    try {
+      return await this.fetch('/flows');
+    } catch (error) {
+      console.error("Error fetching Klaviyo flows:", error);
+      throw error;
+    }
   }
 
   async getFlowActions(flowId: string) {
-    console.log(`Get flow actions called for flow ${flowId}`);
-    return { data: [] };
+    try {
+      return await this.fetch(`/flows/${flowId}/actions`);
+    } catch (error) {
+      console.error(`Error fetching actions for flow ${flowId}:`, error);
+      throw error;
+    }
   }
 
   async getFlowMessages(flowActionId: string) {
-    console.log(`Get flow messages called for flow action ${flowActionId}`);
-    return { data: [] };
+    try {
+      return await this.fetch(`/flow-actions/${flowActionId}/messages`);
+    } catch (error) {
+      console.error(`Error fetching messages for flow action ${flowActionId}:`, error);
+      throw error;
+    }
   }
 
   async getMetrics() {
-    console.log('Get metrics called');
-    return { data: [] };
+    try {
+      return await this.fetch('/metrics');
+    } catch (error) {
+      console.error("Error fetching Klaviyo metrics:", error);
+      throw error;
+    }
   }
 
   async getMetricAggregate(metricId: string) {
-    console.log(`Get metric aggregate called for metric ${metricId}`);
-    return { data: {} };
+    try {
+      return await this.fetch(`/metrics/${metricId}/aggregate`);
+    } catch (error) {
+      console.error(`Error fetching aggregate for metric ${metricId}:`, error);
+      throw error;
+    }
   }
 }
 

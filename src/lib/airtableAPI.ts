@@ -31,27 +31,96 @@ export class AirtableApiClient {
 
     if (!response.ok) {
       const error = await response.json().catch(() => ({}));
-      throw new Error(`Airtable API Error: ${response.status} - ${error.message || response.statusText}`);
+      const errorMessage = error.error?.message || response.statusText;
+      const errorCode = response.status;
+      throw new Error(`Airtable API Error: ${errorCode} - ${errorMessage}`);
     }
 
     return await response.json() as T;
   }
 
+  async testConnection() {
+    try {
+      // Try to get metadata from the base to test connection
+      const response = await fetch(`${this.baseUrl}/${this.baseId}`, {
+        headers: {
+          'Authorization': `Bearer ${this.apiKey}`,
+          'Content-Type': 'application/json',
+        },
+      });
+
+      if (!response.ok) {
+        const error = await response.json().catch(() => ({}));
+        throw new Error(`${response.status} - ${error.error?.message || response.statusText}`);
+      }
+
+      return await response.json();
+    } catch (error) {
+      console.error("Airtable connection test failed:", error);
+      throw error;
+    }
+  }
+
   async createRecords(tableName: string, records: any[]) {
-    // This would be a real implementation in a production app
-    // For this demo, we'll simulate a successful response
-    console.log(`Create records called for table ${tableName}`, records);
-    return { records: records.map((_, i) => ({ id: `rec${i}`, fields: {} })) };
+    try {
+      // In a production environment, we'd want to handle batching for large record sets
+      const payload = {
+        records: records.map(record => ({ fields: record }))
+      };
+
+      return await this.fetch(tableName, {
+        method: 'POST',
+        body: JSON.stringify(payload)
+      });
+    } catch (error) {
+      console.error(`Error creating records in ${tableName}:`, error);
+      throw error;
+    }
   }
 
   async updateRecords(tableName: string, records: any[]) {
-    console.log(`Update records called for table ${tableName}`, records);
-    return { records: records.map(record => ({ id: record.id, fields: record.fields })) };
+    try {
+      const payload = {
+        records: records.map(record => ({
+          id: record.id,
+          fields: record.fields
+        }))
+      };
+
+      return await this.fetch(tableName, {
+        method: 'PATCH',
+        body: JSON.stringify(payload)
+      });
+    } catch (error) {
+      console.error(`Error updating records in ${tableName}:`, error);
+      throw error;
+    }
   }
 
   async getRecords(tableName: string, params: any = {}) {
-    console.log(`Get records called for table ${tableName}`, params);
-    return { records: [] };
+    try {
+      // Build query string from params
+      const queryParams = new URLSearchParams();
+      
+      if (params.maxRecords) {
+        queryParams.append('maxRecords', params.maxRecords.toString());
+      }
+      
+      if (params.view) {
+        queryParams.append('view', params.view);
+      }
+      
+      if (params.filterByFormula) {
+        queryParams.append('filterByFormula', params.filterByFormula);
+      }
+
+      const queryString = queryParams.toString() ? `?${queryParams.toString()}` : '';
+      
+      return await this.fetch(`${tableName}${queryString}`);
+    } catch (error) {
+      console.error(`Error fetching records from ${tableName}:`, error);
+      throw error;
+    }
   }
 }
 
