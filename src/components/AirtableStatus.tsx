@@ -1,68 +1,100 @@
 
-import React from 'react';
+import React, { useState, useEffect } from 'react';
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card';
-import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from '@/components/ui/table';
-import { Database, MessageSquare, BarChart } from 'lucide-react';
+import { CheckCircle, XCircle, AlertCircle } from 'lucide-react';
+import AirtableApiClient from '@/lib/airtableAPI';
 
-const AirtableStatus = () => {
-  const tables = [
-    {
-      id: 1,
-      name: 'Flows',
-      icon: <Database className="h-4 w-4 text-primary" />,
-      recordCount: 0,
-      lastUpdated: null,
-      fields: ['Flow ID', 'Flow Name', 'Status', 'Trigger Type', 'Created Date', 'Updated Date', 'Archived']
-    },
-    {
-      id: 2,
-      name: 'Flow Messages',
-      icon: <MessageSquare className="h-4 w-4 text-primary" />,
-      recordCount: 0,
-      lastUpdated: null,
-      fields: ['Message ID', 'Linked Flow ID', 'Name', 'Channel', 'Subject Line', 'Status', 'Created Date', 'Updated Date']
-    },
-    {
-      id: 3,
-      name: 'Metrics',
-      icon: <BarChart className="h-4 w-4 text-primary" />,
-      recordCount: 0,
-      lastUpdated: null,
-      fields: ['Metric ID', 'Name', 'Integration Name', 'Created Date', 'Updated Date']
+interface AirtableStatusProps {
+  airtableApiKey: string;
+  airtableBaseId: string;
+}
+
+const AirtableStatus = ({ airtableApiKey, airtableBaseId }: AirtableStatusProps) => {
+  const [status, setStatus] = useState<'checking' | 'connected' | 'disconnected' | 'error'>('checking');
+  const [errorMessage, setErrorMessage] = useState<string | null>(null);
+  
+  useEffect(() => {
+    const checkConnection = async () => {
+      if (!airtableApiKey || !airtableBaseId) {
+        setStatus('disconnected');
+        return;
+      }
+      
+      setStatus('checking');
+      
+      try {
+        const airtableClient = new AirtableApiClient({ 
+          apiKey: airtableApiKey, 
+          baseId: airtableBaseId 
+        });
+        
+        await airtableClient.testConnection();
+        setStatus('connected');
+        setErrorMessage(null);
+      } catch (error) {
+        setStatus('error');
+        setErrorMessage(error instanceof Error ? error.message : 'Unknown error');
+      }
+    };
+    
+    checkConnection();
+  }, [airtableApiKey, airtableBaseId]);
+  
+  const renderStatusContent = () => {
+    switch (status) {
+      case 'checking':
+        return (
+          <div className="flex items-center justify-center p-6">
+            <div className="animate-spin h-10 w-10 border-4 border-primary border-t-transparent rounded-full" />
+            <p className="ml-4 text-muted-foreground">Checking connection...</p>
+          </div>
+        );
+      
+      case 'connected':
+        return (
+          <div className="flex flex-col items-center justify-center p-6 text-center">
+            <CheckCircle className="h-12 w-12 text-green-500 mb-4" />
+            <h3 className="text-xl font-semibold text-green-600 mb-2">Connected</h3>
+            <p className="text-sm text-muted-foreground">
+              Successfully connected to Airtable
+            </p>
+          </div>
+        );
+      
+      case 'disconnected':
+        return (
+          <div className="flex flex-col items-center justify-center p-6 text-center">
+            <AlertCircle className="h-12 w-12 text-amber-500 mb-4" />
+            <h3 className="text-xl font-semibold text-amber-600 mb-2">Not Connected</h3>
+            <p className="text-sm text-muted-foreground">
+              Please configure your Airtable API Key and Base ID
+            </p>
+          </div>
+        );
+      
+      case 'error':
+        return (
+          <div className="flex flex-col items-center justify-center p-6 text-center">
+            <XCircle className="h-12 w-12 text-red-500 mb-4" />
+            <h3 className="text-xl font-semibold text-red-600 mb-2">Connection Error</h3>
+            <p className="text-sm text-red-500 max-w-xs mx-auto">
+              {errorMessage || 'Failed to connect to Airtable'}
+            </p>
+          </div>
+        );
     }
-  ];
-
+  };
+  
   return (
     <Card>
       <CardHeader>
-        <CardTitle>Airtable Tables Schema</CardTitle>
+        <CardTitle>Airtable Connection Status</CardTitle>
         <CardDescription>
-          Data structure for Klaviyo information in Airtable
+          Status of connection to your Airtable database
         </CardDescription>
       </CardHeader>
       <CardContent>
-        <div className="space-y-4">
-          {tables.map((table) => (
-            <div key={table.id} className="border rounded-md">
-              <div className="bg-gray-50 p-3 flex items-center gap-2 border-b">
-                {table.icon}
-                <h3 className="font-medium">{table.name}</h3>
-              </div>
-              <div className="p-3">
-                <div className="text-sm mb-2">
-                  <span className="text-muted-foreground">Fields:</span>
-                </div>
-                <div className="flex flex-wrap gap-1.5">
-                  {table.fields.map((field, index) => (
-                    <span key={index} className="text-xs bg-gray-100 px-2 py-1 rounded">
-                      {field}
-                    </span>
-                  ))}
-                </div>
-              </div>
-            </div>
-          ))}
-        </div>
+        {renderStatusContent()}
       </CardContent>
     </Card>
   );
