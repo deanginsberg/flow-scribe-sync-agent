@@ -42,18 +42,18 @@ export class KlaviyoApiClient {
 
   async testConnection() {
     try {
-      // Try to get account info to test connection
-      const response = await fetch(`${this.baseUrl}/accounts/`, {
+      // Use our proxy API instead of calling Klaviyo directly
+      const response = await fetch('/api/test-klaviyo', {
+        method: 'POST',
         headers: {
-          'Accept': 'application/json',
-          'Authorization': `Klaviyo-API-Key ${this.apiKey}`,
-          'revision': '2023-10-15',
+          'Content-Type': 'application/json',
         },
+        body: JSON.stringify({ apiKey: this.apiKey }),
       });
 
       if (!response.ok) {
         const error = await response.json().catch(() => ({}));
-        throw new Error(`${response.status} - ${error.detail || error.message || response.statusText}`);
+        throw new Error(`${response.status} - ${error.message || error.detail || response.statusText}`);
       }
 
       return await response.json();

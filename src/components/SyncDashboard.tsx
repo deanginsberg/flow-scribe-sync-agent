@@ -1,4 +1,3 @@
-
 import React, { useState } from 'react';
 import { Button } from '@/components/ui/button';
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card';
@@ -50,8 +49,21 @@ const SyncDashboard = ({ klaviyoApiKey, airtableApiKey, airtableBaseId }: SyncDa
     addLog("Testing Klaviyo API connection...", "info");
 
     try {
-      const klaviyoClient = new KlaviyoApiClient({ apiKey: klaviyoApiKey });
-      await klaviyoClient.testConnection();
+      const response = await fetch('/api/test-klaviyo', {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+        },
+        body: JSON.stringify({ apiKey: klaviyoApiKey }),
+      });
+      
+      const data = await response.json();
+      
+      if (!response.ok) {
+        throw new Error(data.message || 'Unknown error');
+      }
+      
+      console.log('Klaviyo connection test response:', data);
       
       addLog("Klaviyo API connection successful", "success");
       toast.success("Successfully connected to Klaviyo API");
@@ -59,13 +71,8 @@ const SyncDashboard = ({ klaviyoApiKey, airtableApiKey, airtableBaseId }: SyncDa
       console.error("Klaviyo connection error:", error);
       
       if (error instanceof Error) {
-        if (error.message.includes("401")) {
-          addLog("Invalid Klaviyo API Key", "error");
-          toast.error("Invalid Klaviyo API Key");
-        } else {
-          addLog(`Klaviyo connection error: ${error.message}`, "error");
-          toast.error(`Klaviyo connection error: ${error.message}`);
-        }
+        addLog(`Klaviyo connection error: ${error.message}`, "error");
+        toast.error(`Klaviyo connection error: ${error.message}`);
       } else {
         addLog("Unknown error connecting to Klaviyo", "error");
         toast.error("Unknown error connecting to Klaviyo");
@@ -90,30 +97,24 @@ const SyncDashboard = ({ klaviyoApiKey, airtableApiKey, airtableBaseId }: SyncDa
     addLog("Starting Klaviyo to Airtable sync...", "info");
 
     try {
-      // Test both connections before syncing
       const klaviyoClient = new KlaviyoApiClient({ apiKey: klaviyoApiKey });
       const airtableClient = new AirtableApiClient({ 
         apiKey: airtableApiKey, 
         baseId: airtableBaseId 
       });
 
-      // First test Klaviyo connection
       addLog("Verifying Klaviyo API connection...", "info");
       await klaviyoClient.testConnection();
       addLog("Klaviyo API connection verified", "success");
 
-      // Then test Airtable connection
       addLog("Verifying Airtable API connection...", "info");
       await airtableClient.testConnection();
       addLog("Airtable API connection verified", "success");
 
-      // Begin the sync process
       addLog("Fetching data from Klaviyo...", "info");
       
-      // Use the syncEngine to perform the actual sync
       await syncKlaviyoToAirtable(klaviyoApiKey, airtableApiKey, airtableBaseId);
       
-      // Update last sync time
       setLastSyncTime(new Date());
       addLog("Sync complete! All data has been successfully transferred to Airtable.", "success");
       toast.success("Sync completed successfully");
