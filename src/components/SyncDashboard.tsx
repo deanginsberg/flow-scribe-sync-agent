@@ -49,14 +49,17 @@ const SyncDashboard = ({ klaviyoApiKey, airtableApiKey, airtableBaseId }: SyncDa
     addLog("Testing Klaviyo API connection...", "info");
 
     try {
-      const response = await fetch('/api/test-klaviyo', {
+      const response = await fetch('/api/test-klaviyo', { 
         method: 'POST',
         headers: {
           'Content-Type': 'application/json',
         },
-        body: JSON.stringify({ apiKey: klaviyoApiKey }),
+        body: JSON.stringify({
+          apiKey: klaviyoApiKey,
+        }),
       });
-      
+
+                
       const data = await response.json();
       
       if (!response.ok) {

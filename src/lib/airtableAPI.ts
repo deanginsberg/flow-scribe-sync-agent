@@ -54,17 +54,18 @@ export class AirtableApiClient {
     const path = `${tableName}${query.toString() ? `?${query.toString()}` : ''}`;
     return this.request<{ records: any[] }>(path);
   }
-
   async createRecords(tableName: string, records: Record<string, any>[]) {
     const payload = {
       records: records.map(fields => ({ fields })),
     };
-
+  
+    console.log('[Airtable Create Payload]', JSON.stringify(payload, null, 2)); // 👀 LOG
+  
     return this.request<{ records: any[] }>(tableName, {
       method: 'POST',
       body: JSON.stringify(payload),
     });
-  }
+  }  
 
   async updateRecords(tableName: string, records: { id: string; fields: Record<string, any> }[]) {
     const payload = {
