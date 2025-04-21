@@ -349,17 +349,41 @@ export const syncKlaviyoToAirtable = async (
     console.log(`Retrieved ${metricsCount} metric records`);
     
     // 6. Sync to Airtable
-    console.log('Syncing flows to Airtable');
-    await airtableClient.createRecords('Flows', transformedFlows);
+    try {
+      console.log('Syncing flows to Airtable');
+      const flowsResult = await airtableClient.createRecords('Flows', transformedFlows);
+      console.log(`Successfully synced ${flowsResult.records.length} flows`);
+    } catch (error) {
+      console.error('Error syncing flows to Airtable:', error);
+      throw new Error(`Failed to sync flows: ${error.message}`);
+    }
     
-    console.log('Syncing messages to Airtable');
-    await airtableClient.createRecords('Flow Messages', transformedMessages);
+    try {
+      console.log('Syncing messages to Airtable');
+      const messagesResult = await airtableClient.createRecords('Flow Messages', transformedMessages);
+      console.log(`Successfully synced ${messagesResult.records.length} messages`);
+    } catch (error) {
+      console.error('Error syncing messages to Airtable:', error);
+      throw new Error(`Failed to sync messages: ${error.message}`);
+    }
     
-    console.log('Syncing metrics to Airtable');
-    await airtableClient.createRecords('Metrics', transformedMetrics);
+    try {
+      console.log('Syncing metrics to Airtable');
+      const metricsResult = await airtableClient.createRecords('Metrics', transformedMetrics);
+      console.log(`Successfully synced ${metricsResult.records.length} metrics`);
+    } catch (error) {
+      console.error('Error syncing metrics to Airtable:', error);
+      throw new Error(`Failed to sync metrics: ${error.message}`);
+    }
     
-    console.log('Syncing metric data to Airtable');
-    await airtableClient.createRecords('Flow Metrics', metricsData);
+    try {
+      console.log('Syncing metric data to Airtable');
+      const metricsDataResult = await airtableClient.createRecords('Flow Metrics', metricsData);
+      console.log(`Successfully synced ${metricsDataResult.records.length} metric data records`);
+    } catch (error) {
+      console.error('Error syncing metric data to Airtable:', error);
+      throw new Error(`Failed to sync metric data: ${error.message}`);
+    }
     
     console.log('Sync completed successfully');
     return { 
