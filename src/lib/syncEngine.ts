@@ -82,6 +82,22 @@ interface Timeframes {
   prev_30d: Timeframe;
 }
 
+interface KlaviyoApiResponse<T> {
+  data: T[];
+}
+
+interface KlaviyoMetricAggregateResponse {
+  data: {
+    attributes: {
+      data: Array<{
+        measurements: {
+          count: number[];
+        };
+      }>;
+    };
+  };
+}
+
 export const syncKlaviyoToAirtable = async (
   klaviyoApiKey: string, 
   airtableApiKey: string, 
@@ -117,7 +133,7 @@ export const syncKlaviyoToAirtable = async (
     
     // 3. Fetch all data from Klaviyo
     console.log('Fetching flows from Klaviyo');
-    const flowsResponse = await klaviyoClient.getFlows();
+    const flowsResponse = await klaviyoClient.getFlows() as KlaviyoApiResponse<KlaviyoFlow>;
     const flows: KlaviyoFlow[] = flowsResponse?.data || [];
     console.log(`Found ${flows.length} flows`);
     
@@ -127,13 +143,13 @@ export const syncKlaviyoToAirtable = async (
     for (const flow of flows) {
       try {
         // Get all actions for this flow
-        const actionsResponse = await klaviyoClient.getFlowActions(flow.id);
+        const actionsResponse = await klaviyoClient.getFlowActions(flow.id) as KlaviyoApiResponse<any>;
         const actions = actionsResponse?.data || [];
         
         for (const action of actions) {
           // Get all messages for this action
           try {
-            const messagesResponse = await klaviyoClient.getFlowMessages(action.id);
+            const messagesResponse = await klaviyoClient.getFlowMessages(action.id) as KlaviyoApiResponse<KlaviyoMessage>;
             const messages = messagesResponse?.data || [];
             
             // Add flow_id to each message for reference
@@ -155,7 +171,7 @@ export const syncKlaviyoToAirtable = async (
     console.log(`Found ${allMessages.length} messages total`);
     
     console.log('Fetching metrics from Klaviyo');
-    const metricsResponse = await klaviyoClient.getMetrics();
+    const metricsResponse = await klaviyoClient.getMetrics() as KlaviyoApiResponse<KlaviyoMetric>;
     const metrics = metricsResponse?.data || [];
     console.log(`Found ${metrics.length} metrics`);
     
@@ -172,6 +188,9 @@ export const syncKlaviyoToAirtable = async (
         archived: flow.attributes?.archived || false
       }
     }));
+
+    console.log('flows to create', transformedFlows.length);
+    console.log('flows to update', 0);
     
     const transformedMessages: AirtableMessage[] = allMessages.map(message => ({
       fields: {
@@ -255,7 +274,7 @@ export const syncKlaviyoToAirtable = async (
           };
           
           // Query for this metric
-          const currentResponse = await klaviyoClient.queryMetricAggregate(currentPayload);
+          const currentResponse = await klaviyoClient.queryMetricAggregate(currentPayload) as KlaviyoMetricAggregateResponse;
           
           // Extract the value from the response
           let metricValue = 0;
@@ -310,7 +329,7 @@ export const syncKlaviyoToAirtable = async (
           };
           
           // Query for this metric
-          const prevResponse = await klaviyoClient.queryMetricAggregate(prevPayload);
+          const prevResponse = await klaviyoClient.queryMetricAggregate(prevPayload) as KlaviyoMetricAggregateResponse;
           
           // Extract the value from the response
           let metricValue = 0;
