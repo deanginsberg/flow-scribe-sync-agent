@@ -9,6 +9,24 @@ interface AirtableApiOptions {
   baseId: string;
 }
 
+interface AirtableRecord {
+  id: string;
+  fields: Record<string, any>;
+  createdTime?: string;
+}
+
+interface AirtableResponse {
+  records: AirtableRecord[];
+  offset?: string;
+}
+
+interface AirtableError {
+  error: {
+    type: string;
+    message: string;
+  };
+}
+
 /**
  * The public methods you will typically call are:
  *   • testConnection()
@@ -31,7 +49,7 @@ export class AirtableApiClient {
 
   // ---------------------------------------------------------------------------
   //  Low‑level fetch helper
-  private async request<T>(path: string, options: RequestInit = {}): Promise<T> {
+  private async request<T extends AirtableResponse>(path: string, options: RequestInit = {}): Promise<T> {
     try {
       console.log(`[Airtable] Making request to: ${this.baseUrl}/${path}`);
       if (options.body) {
@@ -51,12 +69,12 @@ export class AirtableApiClient {
       if (!res.ok) {
         // Attempt to parse error response as JSON
         const errorText = await res.text();
-        let errBody;
+        let errBody: AirtableError;
         try {
           errBody = JSON.parse(errorText);
         } catch (parseError) {
           console.error('[Airtable] Failed to parse error response:', errorText);
-          errBody = { error: { message: `Could not parse error response: ${errorText.substring(0, 100)}...` } };
+          errBody = { error: { type: 'ParseError', message: `Could not parse error response: ${errorText.substring(0, 100)}...` } };
         }
         
         const msg = errBody?.error?.message || res.statusText;
@@ -95,7 +113,7 @@ export class AirtableApiClient {
       }
     } catch (error) {
       // Catch and enhance any network errors
-      if (error.name === 'TypeError' && error.message.includes('fetch')) {
+      if (error instanceof TypeError && error.message.includes('fetch')) {
         console.error('[Airtable] Network error:', error);
         throw new Error(`Airtable network error: ${error.message}. Check your internet connection and API key.`);
       }
@@ -112,16 +130,18 @@ export class AirtableApiClient {
     try {
       console.log('[Airtable] Testing API connection...');
       // list a single record from any known table (Flows is fine)
-      const result = await this.request('Flows?maxRecords=1');
+      const result = await this.request<AirtableResponse>('Flows?maxRecords=1');
       console.log('[Airtable] Connection test successful');
       return true;
     } catch (error) {
       console.error('[Airtable] Connection test failed:', error);
       // Check for specific error types and provide more helpful messages
-      if (error.message && error.message.includes('401')) {
-        throw new Error('Airtable authentication failed: Check your API key');
-      } else if (error.message && error.message.includes('404')) {
-        throw new Error('Airtable base or table not found: Check your base ID and ensure "Flows" table exists');
+      if (error instanceof Error) {
+        if (error.message.includes('401')) {
+          throw new Error('Airtable authentication failed: Check your API key');
+        } else if (error.message.includes('404')) {
+          throw new Error('Airtable base or table not found: Check your base ID and ensure "Flows" table exists');
+        }
       }
       throw error;
     }
@@ -130,14 +150,14 @@ export class AirtableApiClient {
   async getRecords(
     table: string,
     params: { maxRecords?: number; view?: string; filterByFormula?: string } = {}
-  ) {
+  ): Promise<AirtableResponse> {
     const qs = new URLSearchParams();
     if (params.maxRecords) qs.set('maxRecords', params.maxRecords.toString());
     if (params.view)       qs.set('view', params.view);
     if (params.filterByFormula) qs.set('filterByFormula', params.filterByFormula);
 
     const path = `${table}${qs.toString() ? `?${qs.toString()}` : ''}`;
-    return this.request<{ records: any[] }>(path);
+    return this.request<AirtableResponse>(path);
   }
 
   // ---------------------------------------------------------------------------
@@ -151,7 +171,7 @@ export class AirtableApiClient {
     return clone;
   }
 
-  async createRecords(table: string, rows: Record<string, any>[]) {
+  async createRecords(table: string, rows: Record<string, any>[]): Promise<AirtableResponse> {
     if (!rows || !Array.isArray(rows)) {
       console.error('[Airtable] createRecords called with invalid rows:', rows);
       throw new Error('Invalid records data: rows must be an array');
@@ -164,8 +184,8 @@ export class AirtableApiClient {
     
     console.log(`[Airtable] Creating ${rows.length} records in table '${table}' with batch size ${AirtableApiClient.BATCH_SIZE}`);
     
-    const all: any[] = [];
-    const failedBatches: { batchIndex: number, error: any }[] = [];
+    const all: AirtableRecord[] = [];
+    const failedBatches: { batchIndex: number, error: Error }[] = [];
 
     for (let i = 0; i < rows.length; i += AirtableApiClient.BATCH_SIZE) {
       const batchIndex = Math.floor(i / AirtableApiClient.BATCH_SIZE) + 1;
@@ -192,7 +212,7 @@ export class AirtableApiClient {
           }
         }
 
-        const res = await this.request<{ records: any[] }>(table, {
+        const res = await this.request<AirtableResponse>(table, {
           method: 'POST',
           body: JSON.stringify({ records: batch }),
         });
@@ -224,12 +244,12 @@ export class AirtableApiClient {
           console.error('[Airtable] Could not log batch sample:', logError);
         }
         
-        failedBatches.push({ batchIndex, error });
+        failedBatches.push({ batchIndex, error: error instanceof Error ? error : new Error(String(error)) });
         
         // Decide whether to continue or throw the error
         if (failedBatches.length >= 3) {
           console.error(`[Airtable] Too many failed batches (${failedBatches.length}), aborting`);
-          throw new Error(`Multiple batch failures: ${error.message}`);
+          throw new Error(`Multiple batch failures: ${error instanceof Error ? error.message : String(error)}`);
         }
         
         console.log('[Airtable] Continuing with next batch despite error');
@@ -250,13 +270,13 @@ export class AirtableApiClient {
   // ---------------------------------------------------------------------------
   //  UPDATE helpers -----------------------------------------------------------
 
-  private sanitiseUpdateRow(row: { id: string } & Record<string, any>) {
+  private sanitiseUpdateRow(row: { id: string } & Record<string, any>): { id: string; fields: Record<string, any> } {
     const { id, fields, ...rest } = row as any;
     // if caller already supplied "fields", keep it, otherwise use rest
     return fields ? { id, fields } : { id, fields: rest };
   }
 
-  async updateRecords(table: string, rows: { id: string } & Record<string, any>[]) {
+  async updateRecords(table: string, rows: Array<{ id: string } & Record<string, any>>): Promise<AirtableResponse> {
     if (!rows || !Array.isArray(rows)) {
       console.error('[Airtable] updateRecords called with invalid rows:', rows);
       throw new Error('Invalid records data: rows must be an array');
@@ -269,8 +289,8 @@ export class AirtableApiClient {
     
     console.log(`[Airtable] Updating ${rows.length} records in table '${table}' with batch size ${AirtableApiClient.BATCH_SIZE}`);
     
-    const all: any[] = [];
-    const failedBatches: { batchIndex: number, error: any }[] = [];
+    const all: AirtableRecord[] = [];
+    const failedBatches: { batchIndex: number, error: Error }[] = [];
 
     for (let i = 0; i < rows.length; i += AirtableApiClient.BATCH_SIZE) {
       const batchIndex = Math.floor(i / AirtableApiClient.BATCH_SIZE) + 1;
@@ -301,7 +321,7 @@ export class AirtableApiClient {
           }
         }
 
-        const res = await this.request<{ records: any[] }>(table, {
+        const res = await this.request<AirtableResponse>(table, {
           method: 'PATCH',
           body: JSON.stringify({ records: batch }),
         });
@@ -325,12 +345,12 @@ export class AirtableApiClient {
           console.error('[Airtable] Could not log batch sample:', logError);
         }
         
-        failedBatches.push({ batchIndex, error });
+        failedBatches.push({ batchIndex, error: error instanceof Error ? error : new Error(String(error)) });
         
         // Decide whether to continue or throw the error
         if (failedBatches.length >= 3) {
           console.error(`[Airtable] Too many failed batches (${failedBatches.length}), aborting`);
-          throw new Error(`Multiple batch failures: ${error.message}`);
+          throw new Error(`Multiple batch failures: ${error instanceof Error ? error.message : String(error)}`);
         }
         
         console.log('[Airtable] Continuing with next batch despite error');
