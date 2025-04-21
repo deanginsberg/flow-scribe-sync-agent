@@ -189,6 +189,18 @@ export const syncKlaviyoToAirtable = async (
       }
     }));
 
+    console.log('[Sync Debug] Flows to create:', transformedFlows.length);
+    console.log('[Sync Debug] Flows to update:', 0);
+
+    // Debug logging for flows
+    console.log('=== Flow Sync Debug Info ===');
+    console.log('Total flows from Klaviyo:', flows.length);
+    console.log('Transformed flows for Airtable:', transformedFlows.length);
+    console.log('First flow sample:', JSON.stringify(transformedFlows[0], null, 2));
+    console.log('Table name being used:', 'Flows');
+    console.log('Airtable base ID:', airtableBaseId);
+    console.log('===========================');
+
     console.log('flows to create', transformedFlows.length);
     console.log('flows to update', 0);
     
@@ -370,6 +382,11 @@ export const syncKlaviyoToAirtable = async (
     // 6. Sync to Airtable
     try {
       console.log('Syncing flows to Airtable');
+      console.log(
+        'AIRTABLE ⇢', 'Flows', 'create',
+        'records:', transformedFlows.length,
+        'sample:', JSON.stringify(transformedFlows[0], null, 2)
+      );
       const flowsResult = await airtableClient.createRecords('Flows', transformedFlows);
       console.log(`Successfully synced ${flowsResult.records.length} flows`);
     } catch (error) {
@@ -379,6 +396,11 @@ export const syncKlaviyoToAirtable = async (
     
     try {
       console.log('Syncing messages to Airtable');
+      console.log(
+        'AIRTABLE ⇢', 'Flow Messages', 'create',
+        'records:', transformedMessages.length,
+        'sample:', JSON.stringify(transformedMessages[0], null, 2)
+      );
       const messagesResult = await airtableClient.createRecords('Flow Messages', transformedMessages);
       console.log(`Successfully synced ${messagesResult.records.length} messages`);
     } catch (error) {
@@ -388,6 +410,11 @@ export const syncKlaviyoToAirtable = async (
     
     try {
       console.log('Syncing metrics to Airtable');
+      console.log(
+        'AIRTABLE ⇢', 'Metrics', 'create',
+        'records:', transformedMetrics.length,
+        'sample:', JSON.stringify(transformedMetrics[0], null, 2)
+      );
       const metricsResult = await airtableClient.createRecords('Metrics', transformedMetrics);
       console.log(`Successfully synced ${metricsResult.records.length} metrics`);
     } catch (error) {
@@ -397,6 +424,11 @@ export const syncKlaviyoToAirtable = async (
     
     try {
       console.log('Syncing metric data to Airtable');
+      console.log(
+        'AIRTABLE ⇢', 'Flow Metrics', 'create',
+        'records:', metricsData.length,
+        'sample:', JSON.stringify(metricsData[0], null, 2)
+      );
       const metricsDataResult = await airtableClient.createRecords('Flow Metrics', metricsData);
       console.log(`Successfully synced ${metricsDataResult.records.length} metric data records`);
     } catch (error) {
