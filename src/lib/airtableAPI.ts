@@ -55,27 +55,75 @@ export class AirtableApiClient {
     return this.request<{ records: any[] }>(path);
   }
   async createRecords(tableName: string, records: Record<string, any>[]) {
-    const payload = {
-      records: records.map(fields => ({ fields })),
-    };
-  
-    console.log('[Airtable Create Payload]', JSON.stringify(payload, null, 2)); // 👀 LOG
-  
-    return this.request<{ records: any[] }>(tableName, {
-      method: 'POST',
-      body: JSON.stringify(payload),
-    });
+    // Airtable has a limit of 10 records per request
+    const BATCH_SIZE = 10;
+    const allResults: any[] = [];
+    
+    // Split records into chunks of BATCH_SIZE
+    for (let i = 0; i < records.length; i += BATCH_SIZE) {
+      const batch = records.slice(i, i + BATCH_SIZE);
+      
+      const payload = {
+        records: batch.map(fields => ({ fields })),
+      };
+      
+      console.log(`[Airtable Create Batch ${i/BATCH_SIZE + 1}/${Math.ceil(records.length/BATCH_SIZE)}] Records: ${batch.length}`);
+      
+      try {
+        const result = await this.request<{ records: any[] }>(tableName, {
+          method: 'POST',
+          body: JSON.stringify(payload),
+        });
+        
+        allResults.push(...(result.records || []));
+        
+        // Add a small delay between batches to avoid rate limiting
+        if (i + BATCH_SIZE < records.length) {
+          await new Promise(resolve => setTimeout(resolve, 100));
+        }
+      } catch (error) {
+        console.error(`Error creating batch ${i/BATCH_SIZE + 1}:`, error);
+        throw error;
+      }
+    }
+    
+    return { records: allResults };
   }  
 
   async updateRecords(tableName: string, records: { id: string; fields: Record<string, any> }[]) {
-    const payload = {
-      records,
-    };
-
-    return this.request<{ records: any[] }>(tableName, {
-      method: 'PATCH',
-      body: JSON.stringify(payload),
-    });
+    // Airtable has a limit of 10 records per request
+    const BATCH_SIZE = 10;
+    const allResults: any[] = [];
+    
+    // Split records into chunks of BATCH_SIZE
+    for (let i = 0; i < records.length; i += BATCH_SIZE) {
+      const batch = records.slice(i, i + BATCH_SIZE);
+      
+      const payload = {
+        records: batch,
+      };
+      
+      console.log(`[Airtable Update Batch ${i/BATCH_SIZE + 1}/${Math.ceil(records.length/BATCH_SIZE)}] Records: ${batch.length}`);
+      
+      try {
+        const result = await this.request<{ records: any[] }>(tableName, {
+          method: 'PATCH',
+          body: JSON.stringify(payload),
+        });
+        
+        allResults.push(...(result.records || []));
+        
+        // Add a small delay between batches to avoid rate limiting
+        if (i + BATCH_SIZE < records.length) {
+          await new Promise(resolve => setTimeout(resolve, 100));
+        }
+      } catch (error) {
+        console.error(`Error updating batch ${i/BATCH_SIZE + 1}:`, error);
+        throw error;
+      }
+    }
+    
+    return { records: allResults };
   }
 }
 
