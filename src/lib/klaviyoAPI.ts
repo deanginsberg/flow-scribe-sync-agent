@@ -62,14 +62,39 @@ export class KlaviyoApiClient {
         
         const response = await fetch('/api/klaviyo-proxy', proxyOptions);
         
-        if (!response.ok) {
-          const error = await response.json().catch(() => ({}));
-          const errorMessage = error.error || error.detail || error.message || response.statusText;
-          const errorCode = response.status;
-          throw new Error(`Klaviyo API Error: ${errorCode} - ${errorMessage}`);
+        // Check content type of response
+        const contentType = response.headers.get('content-type');
+        console.log(`Response from ${endpoint} content type:`, contentType);
+        
+        // If not JSON, handle differently
+        if (!contentType || !contentType.includes('application/json')) {
+          const text = await response.text();
+          console.error(`Non-JSON response from ${endpoint}:`, text.substring(0, 500));
+          throw new Error(`Invalid response: Expected JSON but got ${contentType || 'unknown'}`);
         }
         
-        return await response.json() as T;
+        if (!response.ok) {
+          try {
+            const error = await response.json();
+            const errorMessage = error.error || error.detail || error.message || response.statusText;
+            const errorCode = response.status;
+            throw new Error(`Klaviyo API Error: ${errorCode} - ${errorMessage}`);
+          } catch (jsonError) {
+            // If we can't parse the error as JSON, try to get the raw text
+            const text = await response.clone().text().catch(() => 'Could not read response');
+            console.error(`Error parsing error response from ${endpoint}:`, text.substring(0, 500));
+            throw new Error(`Klaviyo API Error: ${response.status} - Could not parse error response`);
+          }
+        }
+        
+        try {
+          return await response.json() as T;
+        } catch (jsonError) {
+          console.error(`JSON parse error for ${endpoint}:`, jsonError);
+          const text = await response.clone().text().catch(() => 'Could not read response');
+          console.error(`Raw response that caused JSON error for ${endpoint}:`, text.substring(0, 500));
+          throw new Error(`Failed to parse JSON response: ${jsonError.message}`);
+        }
       } else {
         // Direct API call (not recommended for browser use due to CORS)
         const url = `${this.baseUrl}${endpoint}`;
@@ -86,14 +111,39 @@ export class KlaviyoApiClient {
         
         const response = await fetch(url, defaultOptions);
         
-        if (!response.ok) {
-          const error = await response.json().catch(() => ({}));
-          const errorMessage = error.detail || error.message || response.statusText;
-          const errorCode = response.status;
-          throw new Error(`Klaviyo API Error: ${errorCode} - ${errorMessage}`);
+        // Check content type of response
+        const contentType = response.headers.get('content-type');
+        console.log(`Direct API response from ${endpoint} content type:`, contentType);
+        
+        // If not JSON, handle differently
+        if (!contentType || !contentType.includes('application/json')) {
+          const text = await response.text();
+          console.error(`Non-JSON direct API response from ${endpoint}:`, text.substring(0, 500));
+          throw new Error(`Invalid response: Expected JSON but got ${contentType || 'unknown'}`);
         }
         
-        return await response.json() as T;
+        if (!response.ok) {
+          try {
+            const error = await response.json();
+            const errorMessage = error.detail || error.message || response.statusText;
+            const errorCode = response.status;
+            throw new Error(`Klaviyo API Error: ${errorCode} - ${errorMessage}`);
+          } catch (jsonError) {
+            // If we can't parse the error as JSON, try to get the raw text
+            const text = await response.clone().text().catch(() => 'Could not read response');
+            console.error(`Error parsing direct API error response from ${endpoint}:`, text.substring(0, 500));
+            throw new Error(`Klaviyo API Error: ${response.status} - Could not parse error response`);
+          }
+        }
+        
+        try {
+          return await response.json() as T;
+        } catch (jsonError) {
+          console.error(`JSON parse error for direct API ${endpoint}:`, jsonError);
+          const text = await response.clone().text().catch(() => 'Could not read response');
+          console.error(`Raw direct API response that caused JSON error for ${endpoint}:`, text.substring(0, 500));
+          throw new Error(`Failed to parse JSON response: ${jsonError.message}`);
+        }
       }
     } catch (error) {
       // Add better error handling for network errors
@@ -108,6 +158,8 @@ export class KlaviyoApiClient {
   
   async testConnection() {
     try {
+      console.log('Testing Klaviyo connection with API key:', this.apiKey.substring(0, 5) + '...');
+      
       // Use our proxy API instead of calling Klaviyo directly
       const response = await fetch('/api/test-klaviyo', {
         method: 'POST',
@@ -117,12 +169,37 @@ export class KlaviyoApiClient {
         body: JSON.stringify({ apiKey: this.apiKey }),
       });
       
-      if (!response.ok) {
-        const error = await response.json().catch(() => ({}));
-        throw new Error(`${response.status} - ${error.message || error.detail || response.statusText}`);
+      // Check content type of response to help with debugging
+      const contentType = response.headers.get('content-type');
+      console.log('Response content type:', contentType);
+      
+      // If not JSON, handle differently
+      if (!contentType || !contentType.includes('application/json')) {
+        const text = await response.text();
+        console.error('Non-JSON response received:', text.substring(0, 500));
+        throw new Error(`Invalid response: Expected JSON but got ${contentType || 'unknown'}`);
       }
       
-      return await response.json();
+      try {
+        const data = await response.json();
+        
+        if (!response.ok) {
+          throw new Error(`${response.status} - ${data.message || data.error || data.detail || response.statusText}`);
+        }
+        
+        return data;
+      } catch (jsonError) {
+        console.error('JSON parse error:', jsonError);
+        
+        if (jsonError.message.includes('Unexpected end of JSON input')) {
+          // Try to get the raw response again to see what's happening
+          const retryText = await response.clone().text().catch(() => 'Could not read response');
+          console.error('Raw response that caused JSON error:', retryText.substring(0, 500));
+          throw new Error(`JSON parse error: ${jsonError.message}. Check API endpoint configuration.`);
+        }
+        
+        throw jsonError;
+      }
     } catch (error) {
       console.error("Klaviyo connection test failed:", error);
       throw error;
