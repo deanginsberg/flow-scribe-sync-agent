@@ -61,6 +61,13 @@ app.post('/api/klaviyo-proxy', async (req, res) => {
   try {
     const { endpoint, method = 'GET', body, apiKey } = req.body;
     
+    console.log('[Klaviyo Proxy] Request body:', JSON.stringify({
+      endpoint,
+      method,
+      hasBody: !!body,
+      bodyType: body ? typeof body : 'none'
+    }));
+    
     if (!apiKey) {
       return res.status(400).json({ error: 'Missing API key' });
     }
@@ -82,14 +89,51 @@ app.post('/api/klaviyo-proxy', async (req, res) => {
     };
     
     if (body && (method === 'POST' || method === 'PUT' || method === 'PATCH')) {
-      options.body = JSON.stringify(body);
+      try {
+        // Handle when body is already an object
+        if (typeof body === 'object') {
+          options.body = JSON.stringify(body);
+        } else if (typeof body === 'string') {
+          // If it's a string, try to parse it first to make sure it's valid JSON
+          const parsed = JSON.parse(body);
+          options.body = JSON.stringify(parsed);
+        } else {
+          options.body = JSON.stringify(body);
+        }
+      } catch (parseError) {
+        console.error('[Klaviyo Proxy] Error parsing body:', parseError);
+        console.error('[Klaviyo Proxy] Original body:', body);
+        return res.status(400).json({ error: 'Invalid request body format' });
+      }
     }
     
     const url = `https://a.klaviyo.com/api${endpoint}`;
     console.log(`[Klaviyo Proxy] Requesting: ${url}`);
     
     const response = await fetch(url, options);
-    const data = await response.json().catch(() => ({}));
+    
+    // Get the response text first
+    const responseText = await response.text();
+    
+    // Try to parse as JSON
+    let data;
+    try {
+      data = JSON.parse(responseText);
+    } catch (parseError) {
+      console.error('[Klaviyo Proxy] Error parsing response:', parseError);
+      console.error('[Klaviyo Proxy] Response text:', responseText);
+      
+      // If it's not JSON, return the raw text
+      if (!response.ok) {
+        return res.status(response.status).json({
+          error: 'Invalid JSON response from Klaviyo',
+          status: response.status,
+          responseText
+        });
+      }
+      
+      return res.status(200).send(responseText);
+    }
     
     if (!response.ok) {
       console.error(`[Klaviyo Proxy Error] ${response.status}: ${JSON.stringify(data)}`);
@@ -103,7 +147,7 @@ app.post('/api/klaviyo-proxy', async (req, res) => {
     return res.status(200).json(data);
   } catch (err) {
     console.error('[Klaviyo Proxy Error]', err);
-    res.status(500).json({ error: 'Failed to fetch Klaviyo data' });
+    res.status(500).json({ error: 'Failed to fetch Klaviyo data: ' + err.message });
   }
 });
 

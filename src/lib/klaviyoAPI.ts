@@ -24,6 +24,23 @@ export class KlaviyoApiClient {
       if (this.useProxy) {
         console.log(`Using proxy for Klaviyo API request: ${endpoint}`);
         
+        // Handle the body differently based on its type
+        let bodyForProxy;
+        if (options.body) {
+          if (typeof options.body === 'string') {
+            try {
+              // Try to parse if it's a JSON string
+              bodyForProxy = JSON.parse(options.body);
+            } catch (e) {
+              // If not JSON, use as is
+              bodyForProxy = options.body;
+            }
+          } else {
+            // If it's already an object, use directly
+            bodyForProxy = options.body;
+          }
+        }
+        
         const proxyOptions = {
           method: 'POST',
           headers: {
@@ -33,9 +50,15 @@ export class KlaviyoApiClient {
             apiKey: this.apiKey,
             endpoint: endpoint,
             method: options.method || 'GET',
-            body: options.body ? JSON.parse(options.body as string) : undefined
+            body: bodyForProxy
           })
         };
+        
+        console.log(`Proxy request options: ${JSON.stringify({
+          endpoint,
+          method: options.method || 'GET',
+          hasBody: !!bodyForProxy
+        })}`);
         
         const response = await fetch('/api/klaviyo-proxy', proxyOptions);
         
@@ -163,14 +186,27 @@ export class KlaviyoApiClient {
   
   async queryMetricAggregate(payload: any) {
     try {
+      console.log('Query metric aggregate payload:', JSON.stringify(payload));
+      
       // Add delay to respect rate limits (3 per second, 60 per minute)
       await new Promise(resolve => setTimeout(resolve, 1000));
-      return await this.fetch('/metric-aggregates', {
-        method: 'POST',
-        body: JSON.stringify(payload)
-      });
+      
+      // When using the proxy, we don't need to stringify the body as it will be
+      // stringified in the fetch method when sent to the proxy
+      if (this.useProxy) {
+        return await this.fetch('/metric-aggregates', {
+          method: 'POST',
+          body: payload
+        });
+      } else {
+        return await this.fetch('/metric-aggregates', {
+          method: 'POST',
+          body: JSON.stringify(payload)
+        });
+      }
     } catch (error) {
       console.error('Error querying metric aggregates:', error);
+      console.error('Payload was:', JSON.stringify(payload));
       throw error;
     }
   }
