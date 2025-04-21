@@ -98,357 +98,116 @@ interface KlaviyoMetricAggregateResponse {
   };
 }
 
-export const syncKlaviyoToAirtable = async (
-  klaviyoApiKey: string, 
-  airtableApiKey: string, 
-  airtableBaseId: string
-) => {
+export async function syncKlaviyoToAirtable() {
   try {
-    console.log('Starting Klaviyo to Airtable sync');
-    
-    // Generate a unique sync batch ID
-    const syncBatchId = `sync_${Date.now()}`;
-    const clientId = "demo_client";
-    const clientName = "Demo Client";
-    
-    // 1. Initialize clients
-    const klaviyoClient = new KlaviyoApiClient({ apiKey: klaviyoApiKey });
+    console.log('Starting Klaviyo to Airtable sync...');
+    const klaviyoClient = new KlaviyoApiClient({ apiKey: process.env.KLAVIYO_API_KEY || '' });
     const airtableClient = new AirtableApiClient({ 
-      apiKey: airtableApiKey, 
-      baseId: airtableBaseId 
+      apiKey: process.env.AIRTABLE_API_KEY || '', 
+      baseId: process.env.AIRTABLE_BASE_ID || '' 
     });
-    
-    // 2. Define timeframes for metrics
-    const now = new Date();
-    const timeframes: Timeframes = {
-      current_30d: {
-        start: new Date(now.getTime() - 30 * 24 * 60 * 60 * 1000).toISOString(),
-        end: now.toISOString()
-      },
-      prev_30d: {
-        start: new Date(now.getTime() - 60 * 24 * 60 * 60 * 1000).toISOString(),
-        end: new Date(now.getTime() - 30 * 24 * 60 * 60 * 1000).toISOString()
-      }
-    };
-    
-    // 3. Fetch all data from Klaviyo
-    console.log('Fetching flows from Klaviyo');
+
+    // Get all flows from Klaviyo
     const flowsResponse = await klaviyoClient.getFlows() as KlaviyoApiResponse<KlaviyoFlow>;
-    const flows: KlaviyoFlow[] = flowsResponse?.data || [];
-    console.log(`Found ${flows.length} flows`);
-    
-    console.log('Fetching messages for all flows');
-    const allMessages: KlaviyoMessage[] = [];
-    
+    const flows = flowsResponse.data;
+
+    // Get all metrics from Klaviyo
+    const metricsResponse = await klaviyoClient.getMetrics() as KlaviyoApiResponse<KlaviyoMetric>;
+    const metrics = metricsResponse.data;
+
+    // Transform flows for Airtable
+    const transformedFlows: Array<{ fields: Record<string, any> }> = [];
+    const flowErrors: Array<{ flowId: string; error: string }> = [];
+
     for (const flow of flows) {
       try {
-        // Get all actions for this flow
+        // Get actions for this flow
         const actionsResponse = await klaviyoClient.getFlowActions(flow.id) as KlaviyoApiResponse<any>;
-        const actions = actionsResponse?.data || [];
-        
+        const actions = actionsResponse.data;
+
+        // Get messages for each action
+        const messages: KlaviyoMessage[] = [];
         for (const action of actions) {
-          // Get all messages for this action
-          try {
-            const messagesResponse = await klaviyoClient.getFlowMessages(action.id) as KlaviyoApiResponse<KlaviyoMessage>;
-            const messages = messagesResponse?.data || [];
-            
-            // Add flow_id to each message for reference
-            const messagesWithFlowId = messages.map(msg => ({
-              ...msg,
-              flow_id: flow.id
-            }));
-            
-            allMessages.push(...messagesWithFlowId);
-          } catch (error) {
-            console.error(`Error fetching messages for action ${action.id}:`, error);
-          }
+          const messagesResponse = await klaviyoClient.getFlowMessages(action.id) as KlaviyoApiResponse<KlaviyoMessage>;
+          messages.push(...messagesResponse.data);
         }
+
+        // Get metrics for this flow
+        const flowMetrics = metrics.filter(m => m.attributes?.name?.includes(flow.id));
+
+        // Calculate metrics for the current period
+        const currentPayload = {
+          metric_id: flowMetrics.map(m => m.id),
+          interval: 'day',
+          measurements: ['count'],
+          timezone: 'UTC',
+          filter: `greater_or_equal(datetime,2024-01-01),less_or_equal(datetime,2024-12-31)`
+        };
+
+        const currentMetricsResponse = await klaviyoClient.queryMetricAggregate(currentPayload) as KlaviyoMetricAggregateResponse;
+        const currentMetrics = currentMetricsResponse.data.attributes.data;
+
+        // Calculate metrics for the previous period
+        const prevPayload = {
+          metric_id: flowMetrics.map(m => m.id),
+          interval: 'day',
+          measurements: ['count'],
+          timezone: 'UTC',
+          filter: `greater_or_equal(datetime,2023-01-01),less_or_equal(datetime,2023-12-31)`
+        };
+
+        const prevMetricsResponse = await klaviyoClient.queryMetricAggregate(prevPayload) as KlaviyoMetricAggregateResponse;
+        const prevMetrics = prevMetricsResponse.data.attributes.data;
+
+        // Calculate metrics
+        const currentCount = currentMetrics.reduce((sum, m) => sum + m.measurements.count.reduce((a, b) => a + b, 0), 0);
+        const prevCount = prevMetrics.reduce((sum, m) => sum + m.measurements.count.reduce((a, b) => a + b, 0), 0);
+
+        const countGrowth = prevCount > 0 ? ((currentCount - prevCount) / prevCount) * 100 : 0;
+
+        // Transform flow data for Airtable
+        transformedFlows.push({
+          fields: {
+            'Flow ID': flow.id,
+            'Flow Name': flow.attributes?.name || 'Unnamed Flow',
+            'Status': flow.attributes?.status || 'unknown',
+            'Trigger Type': flow.attributes?.trigger_type || 'unknown',
+            'Created At': flow.attributes?.created || new Date().toISOString(),
+            'Updated At': flow.attributes?.updated || new Date().toISOString(),
+            'Current Period Count': currentCount,
+            'Previous Period Count': prevCount,
+            'Count Growth %': countGrowth,
+            'Message Count': messages.length,
+            'Action Count': actions.length,
+            'Metric Count': flowMetrics.length
+          }
+        });
       } catch (error) {
-        console.error(`Error fetching actions for flow ${flow.id}:`, error);
+        console.warn(`Error processing flow ${flow.id}:`, error);
+        flowErrors.push({
+          flowId: flow.id,
+          error: error instanceof Error ? error.message : 'Unknown error'
+        });
+        continue; // Skip this flow and continue with the next one
       }
     }
-    
-    console.log(`Found ${allMessages.length} messages total`);
-    
-    console.log('Fetching metrics from Klaviyo');
-    const metricsResponse = await klaviyoClient.getMetrics() as KlaviyoApiResponse<KlaviyoMetric>;
-    const metrics = metricsResponse?.data || [];
-    console.log(`Found ${metrics.length} metrics`);
-    
-    // 4. Transform data for Airtable
-    console.log('Transforming data for Airtable');
-    const transformedFlows: AirtableFlow[] = flows.map(flow => ({
-      fields: {
-        flow_id: flow.id,
-        name: flow.attributes?.name || 'Unnamed Flow',
-        status: flow.attributes?.status || 'unknown',
-        trigger_type: flow.attributes?.trigger_type || 'unknown',
-        created_date: flow.attributes?.created || new Date().toISOString(),
-        updated_date: flow.attributes?.updated || new Date().toISOString(),
-        archived: flow.attributes?.archived || false
-      }
-    }));
 
-    console.log('[Sync Debug] Flows to create:', transformedFlows.length);
-    console.log('[Sync Debug] Flows to update:', 0);
-
-    // Debug logging for flows
-    console.log('=== Flow Sync Debug Info ===');
-    console.log('Total flows from Klaviyo:', flows.length);
-    console.log('Transformed flows for Airtable:', transformedFlows.length);
-    console.log('First flow sample:', JSON.stringify(transformedFlows[0], null, 2));
-    console.log('Table name being used:', 'Flows');
-    console.log('Airtable base ID:', airtableBaseId);
-    console.log('===========================');
+    // Log any errors that occurred during processing
+    if (flowErrors.length > 0) {
+      console.warn('Errors occurred while processing some flows:', flowErrors);
+    }
 
     console.log('flows to create', transformedFlows.length);
     console.log('flows to update', 0);
-    
-    const transformedMessages: AirtableMessage[] = allMessages.map(message => ({
-      fields: {
-        message_id: message.id,
-        flow_id: message.flow_id,
-        name: message.attributes?.name || 'Unnamed Message',
-        channel: message.attributes?.channel || 'unknown',
-        subject_line: message.attributes?.subject_line,
-        status: message.attributes?.status || 'unknown',
-        created_date: message.attributes?.created || new Date().toISOString(),
-        updated_date: message.attributes?.updated || new Date().toISOString()
-      }
-    }));
-    
-    const transformedMetrics: AirtableMetric[] = metrics.map(metric => ({
-      fields: {
-        metric_id: metric.id,
-        name: metric.attributes?.name || 'Unnamed Metric',
-        integration_name: metric.attributes?.integration || 'unknown',
-        created_date: metric.attributes?.created || new Date().toISOString(),
-        updated_date: metric.attributes?.updated || new Date().toISOString()
-      }
-    }));
-    
-    // 5. Metrics data collection
-    console.log('Fetching metric data for each message');
-    const metricsData = [];
-    
-    // Standard metric types we want to track for each message
-    const metricTypes = [
-      { id: "", name: "Sent Email" },
-      { id: "", name: "Opened Email" },
-      { id: "", name: "Clicked Email" },
-      { id: "", name: "Placed Order" },
-      { id: "", name: "Unsubscribed" },
-      { id: "", name: "Marked Email as Spam" }
-    ];
-    
-    // First, get all the metric IDs for our metric types
-    console.log('Getting metric IDs for standard metrics');
-    for (const metricType of metricTypes) {
-      // Look for this metric in the metrics list
-      const matchedMetric = metrics.find(m => m.attributes?.name === metricType.name);
-      if (matchedMetric) {
-        metricType.id = matchedMetric.id;
-        console.log(`Found ID for ${metricType.name}: ${metricType.id}`);
-      } else {
-        console.log(`Could not find ID for metric: ${metricType.name}`);
-      }
+
+    // Create records in Airtable
+    if (transformedFlows.length > 0) {
+      await airtableClient.createRecords('Flows', transformedFlows);
     }
-    
-    // Only proceed with metrics that we found IDs for
-    const validMetricTypes = metricTypes.filter(m => m.id);
-    console.log(`Processing ${validMetricTypes.length} valid metrics`);
-    
-    // For each message, get metrics for both timeframes
-    for (const message of allMessages) {
-      console.log(`Fetching metrics for message: ${message.id} (${message.attributes?.name || 'Unnamed'})`);
-      
-      // Process each metric type
-      for (const metricType of validMetricTypes) {
-        // Current 30-day window
-        try {
-          console.log(`Fetching ${metricType.name} metrics for current 30-day window`);
-          
-          // Create the query payload
-          const currentPayload = {
-            data: {
-              type: "metric-aggregate",
-              attributes: {
-                metric_id: metricType.id,
-                measurements: ["count"],
-                filter: [
-                  `greater-or-equal(datetime,${timeframes.current_30d.start})`,
-                  `less-than(datetime,${timeframes.current_30d.end})`,
-                  `equals($message,"${message.id}")`
-                ],
-                timezone: "UTC"
-              }
-            }
-          };
-          
-          // Query for this metric
-          const currentResponse = await klaviyoClient.queryMetricAggregate(currentPayload) as KlaviyoMetricAggregateResponse;
-          
-          // Extract the value from the response
-          let metricValue = 0;
-          if (currentResponse?.data?.attributes?.data?.[0]?.measurements?.count) {
-            // Sum up the values if there are multiple data points
-            metricValue = currentResponse.data.attributes.data[0].measurements.count.reduce(
-              (sum, val) => sum + (val || 0), 0
-            );
-          }
-          
-          // Add to our metrics data
-          metricsData.push({
-            fields: {
-              client_id: clientId,
-              client_name: clientName,
-              flow_id: message.flow_id,
-              flow_name: flows.find(f => f.id === message.flow_id)?.attributes?.name || 'Unknown Flow',
-              flow_message_id: message.id,
-              message_name: message.attributes?.name || 'Unnamed Message',
-              metric_type: metricType.name,
-              value: metricValue,
-              timeframe_type: 'current_30d',
-              timeframe_start: timeframes.current_30d.start,
-              timeframe_end: timeframes.current_30d.end,
-              sync_date: new Date().toISOString(),
-              sync_batch_id: syncBatchId
-            }
-          });
-        } catch (error) {
-          console.error(`Error fetching current metrics for message ${message.id}:`, error);
-        }
-        
-        // Previous 30-day window
-        try {
-          console.log(`Fetching ${metricType.name} metrics for previous 30-day window`);
-          
-          // Create the query payload
-          const prevPayload = {
-            data: {
-              type: "metric-aggregate",
-              attributes: {
-                metric_id: metricType.id,
-                measurements: ["count"],
-                filter: [
-                  `greater-or-equal(datetime,${timeframes.prev_30d.start})`,
-                  `less-than(datetime,${timeframes.prev_30d.end})`,
-                  `equals($message,"${message.id}")`
-                ],
-                timezone: "UTC"
-              }
-            }
-          };
-          
-          // Query for this metric
-          const prevResponse = await klaviyoClient.queryMetricAggregate(prevPayload) as KlaviyoMetricAggregateResponse;
-          
-          // Extract the value from the response
-          let metricValue = 0;
-          if (prevResponse?.data?.attributes?.data?.[0]?.measurements?.count) {
-            // Sum up the values if there are multiple data points
-            metricValue = prevResponse.data.attributes.data[0].measurements.count.reduce(
-              (sum, val) => sum + (val || 0), 0
-            );
-          }
-          
-          // Add to our metrics data
-          metricsData.push({
-            fields: {
-              client_id: clientId,
-              client_name: clientName,
-              flow_id: message.flow_id,
-              flow_name: flows.find(f => f.id === message.flow_id)?.attributes?.name || 'Unknown Flow',
-              flow_message_id: message.id,
-              message_name: message.attributes?.name || 'Unnamed Message',
-              metric_type: metricType.name,
-              value: metricValue,
-              timeframe_type: 'prev_30d',
-              timeframe_start: timeframes.prev_30d.start,
-              timeframe_end: timeframes.prev_30d.end,
-              sync_date: new Date().toISOString(),
-              sync_batch_id: syncBatchId
-            }
-          });
-        } catch (error) {
-          console.error(`Error fetching previous metrics for message ${message.id}:`, error);
-        }
-      }
-    }
-    
-    const metricsCount = metricsData.length;
-    console.log(`Retrieved ${metricsCount} metric records`);
-    
-    // 6. Sync to Airtable
-    try {
-      console.log('Syncing flows to Airtable');
-      console.log(
-        'AIRTABLE ⇢', 'Flows', 'create',
-        'records:', transformedFlows.length,
-        'sample:', JSON.stringify(transformedFlows[0], null, 2)
-      );
-      const flowsResult = await airtableClient.createRecords('Flows', transformedFlows);
-      console.log(`Successfully synced ${flowsResult.records.length} flows`);
-    } catch (error) {
-      console.error('Error syncing flows to Airtable:', error);
-      throw new Error(`Failed to sync flows: ${error.message}`);
-    }
-    
-    try {
-      console.log('Syncing messages to Airtable');
-      console.log(
-        'AIRTABLE ⇢', 'Flow Messages', 'create',
-        'records:', transformedMessages.length,
-        'sample:', JSON.stringify(transformedMessages[0], null, 2)
-      );
-      const messagesResult = await airtableClient.createRecords('Flow Messages', transformedMessages);
-      console.log(`Successfully synced ${messagesResult.records.length} messages`);
-    } catch (error) {
-      console.error('Error syncing messages to Airtable:', error);
-      throw new Error(`Failed to sync messages: ${error.message}`);
-    }
-    
-    try {
-      console.log('Syncing metrics to Airtable');
-      console.log(
-        'AIRTABLE ⇢', 'Metrics', 'create',
-        'records:', transformedMetrics.length,
-        'sample:', JSON.stringify(transformedMetrics[0], null, 2)
-      );
-      const metricsResult = await airtableClient.createRecords('Metrics', transformedMetrics);
-      console.log(`Successfully synced ${metricsResult.records.length} metrics`);
-    } catch (error) {
-      console.error('Error syncing metrics to Airtable:', error);
-      throw new Error(`Failed to sync metrics: ${error.message}`);
-    }
-    
-    try {
-      console.log('Syncing metric data to Airtable');
-      console.log(
-        'AIRTABLE ⇢', 'Flow Metrics', 'create',
-        'records:', metricsData.length,
-        'sample:', JSON.stringify(metricsData[0], null, 2)
-      );
-      const metricsDataResult = await airtableClient.createRecords('Flow Metrics', metricsData);
-      console.log(`Successfully synced ${metricsDataResult.records.length} metric data records`);
-    } catch (error) {
-      console.error('Error syncing metric data to Airtable:', error);
-      throw new Error(`Failed to sync metric data: ${error.message}`);
-    }
-    
+
     console.log('Sync completed successfully');
-    return { 
-      success: true,
-      summary: {
-        flows: transformedFlows.length,
-        messages: transformedMessages.length,
-        metrics: transformedMetrics.length,
-        metricRecords: metricsCount
-      }
-    };
-    
   } catch (error) {
-    console.error('Sync error:', error);
+    console.error('Error during sync:', error);
     throw error;
   }
-};
+}
