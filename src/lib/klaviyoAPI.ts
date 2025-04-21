@@ -4,40 +4,83 @@
 interface KlaviyoApiOptions {
   apiKey: string;
   baseUrl?: string;
+  useProxy?: boolean;
 }
 
 export class KlaviyoApiClient {
   private apiKey: string;
   private baseUrl: string;
+  private useProxy: boolean;
   
-  constructor({ apiKey, baseUrl = 'https://a.klaviyo.com/api' }: KlaviyoApiOptions) {
+  constructor({ apiKey, baseUrl = 'https://a.klaviyo.com/api', useProxy = true }: KlaviyoApiOptions) {
     this.apiKey = apiKey;
     this.baseUrl = baseUrl;
+    this.useProxy = useProxy;
   }
   
   private async fetch<T>(endpoint: string, options: RequestInit = {}): Promise<T> {
-    const url = `${this.baseUrl}${endpoint}`;
-    
-    const defaultOptions: RequestInit = {
-      headers: {
-        'Accept': 'application/json',
-        'Authorization': `Klaviyo-API-Key ${this.apiKey}`,
-        'revision': '2023-10-15',
-        'Content-Type': 'application/json',
-      },
-      ...options,
-    };
-    
-    const response = await fetch(url, defaultOptions);
-    
-    if (!response.ok) {
-      const error = await response.json().catch(() => ({}));
-      const errorMessage = error.detail || error.message || response.statusText;
-      const errorCode = response.status;
-      throw new Error(`Klaviyo API Error: ${errorCode} - ${errorMessage}`);
+    try {
+      // If using proxy, modify the request to go through our backend proxy
+      if (this.useProxy) {
+        console.log(`Using proxy for Klaviyo API request: ${endpoint}`);
+        
+        const proxyOptions = {
+          method: 'POST',
+          headers: {
+            'Content-Type': 'application/json',
+          },
+          body: JSON.stringify({
+            apiKey: this.apiKey,
+            endpoint: endpoint,
+            method: options.method || 'GET',
+            body: options.body ? JSON.parse(options.body as string) : undefined
+          })
+        };
+        
+        const response = await fetch('/api/klaviyo-proxy', proxyOptions);
+        
+        if (!response.ok) {
+          const error = await response.json().catch(() => ({}));
+          const errorMessage = error.error || error.detail || error.message || response.statusText;
+          const errorCode = response.status;
+          throw new Error(`Klaviyo API Error: ${errorCode} - ${errorMessage}`);
+        }
+        
+        return await response.json() as T;
+      } else {
+        // Direct API call (not recommended for browser use due to CORS)
+        const url = `${this.baseUrl}${endpoint}`;
+        
+        const defaultOptions: RequestInit = {
+          headers: {
+            'Accept': 'application/json',
+            'Authorization': `Klaviyo-API-Key ${this.apiKey}`,
+            'revision': '2023-10-15',
+            'Content-Type': 'application/json',
+          },
+          ...options,
+        };
+        
+        const response = await fetch(url, defaultOptions);
+        
+        if (!response.ok) {
+          const error = await response.json().catch(() => ({}));
+          const errorMessage = error.detail || error.message || response.statusText;
+          const errorCode = response.status;
+          throw new Error(`Klaviyo API Error: ${errorCode} - ${errorMessage}`);
+        }
+        
+        return await response.json() as T;
+      }
+    } catch (error) {
+      // Add better error handling for network errors
+      console.error("Klaviyo API error:", error);
+      
+      if (error instanceof TypeError && error.message.includes('Failed to fetch')) {
+        throw new Error('Network error: Unable to connect to Klaviyo API. Please check your internet connection or verify that the proxy server is running.');
+      }
+      throw error;
     }
-    
-    return await response.json() as T;
   }
   
   async testConnection() {

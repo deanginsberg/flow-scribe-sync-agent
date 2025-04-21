@@ -12,10 +12,11 @@ export default defineConfig({
   },
   server: {
     proxy: {
-      '/api/test-klaviyo': {
+      '/api': {
         target: 'http://localhost:3001',
         changeOrigin: true,
-        rewrite: (path) => path.replace(/^\/api\/test-klaviyo/, '/api/test-klaviyo'),
+        secure: false,
+        ws: true,
       },
     },
   },
