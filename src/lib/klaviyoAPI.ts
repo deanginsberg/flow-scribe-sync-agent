@@ -7,15 +7,29 @@ interface KlaviyoApiOptions {
   useProxy?: boolean;
 }
 
+// Interface for tracking failed flows
+interface FailedFlow {
+  flowActionId: string;
+  reason: string;
+  status?: string | number;
+  timestamp?: string;
+}
+
 export class KlaviyoApiClient {
   private apiKey: string;
   private baseUrl: string;
   private useProxy: boolean;
+  private failedFlows: FailedFlow[] = [];
   
   constructor({ apiKey, baseUrl = 'https://a.klaviyo.com/api', useProxy = true }: KlaviyoApiOptions) {
     this.apiKey = apiKey;
     this.baseUrl = baseUrl;
     this.useProxy = useProxy;
+  }
+  
+  // Method to get failed flows for reporting
+  getFailedFlows(): FailedFlow[] {
+    return this.failedFlows;
   }
   
   private async fetch<T>(endpoint: string, options: RequestInit = {}): Promise<T> {
@@ -66,8 +80,8 @@ export class KlaviyoApiClient {
         const contentType = response.headers.get('content-type');
         console.log(`Response from ${endpoint} content type:`, contentType);
         
-        // If not JSON, handle differently
-        if (!contentType || !contentType.includes('application/json')) {
+        // Accept both standard JSON and API JSON format
+        if (!contentType || (!contentType.includes('json') && !contentType.includes('vnd.api+json'))) {
           const text = await response.text();
           console.error(`Non-JSON response from ${endpoint}:`, text.substring(0, 500));
           throw new Error(`Invalid response: Expected JSON but got ${contentType || 'unknown'}`);
@@ -101,7 +115,7 @@ export class KlaviyoApiClient {
         
         const defaultOptions: RequestInit = {
           headers: {
-            'Accept': 'application/json',
+            'Accept': 'application/json, application/vnd.api+json',
             'Authorization': `Klaviyo-API-Key ${this.apiKey}`,
             'revision': '2023-10-15',
             'Content-Type': 'application/json',
@@ -115,8 +129,8 @@ export class KlaviyoApiClient {
         const contentType = response.headers.get('content-type');
         console.log(`Direct API response from ${endpoint} content type:`, contentType);
         
-        // If not JSON, handle differently
-        if (!contentType || !contentType.includes('application/json')) {
+        // Accept both standard JSON and API JSON format
+        if (!contentType || (!contentType.includes('json') && !contentType.includes('vnd.api+json'))) {
           const text = await response.text();
           console.error(`Non-JSON direct API response from ${endpoint}:`, text.substring(0, 500));
           throw new Error(`Invalid response: Expected JSON but got ${contentType || 'unknown'}`);
@@ -160,46 +174,11 @@ export class KlaviyoApiClient {
     try {
       console.log('Testing Klaviyo connection with API key:', this.apiKey.substring(0, 5) + '...');
       
-      // Use our proxy API instead of calling Klaviyo directly
-      const response = await fetch('/api/test-klaviyo', {
-        method: 'POST',
-        headers: {
-          'Content-Type': 'application/json',
-        },
-        body: JSON.stringify({ apiKey: this.apiKey }),
-      });
+      // Make direct API call to Klaviyo
+      const response = await this.fetch('/accounts');
       
-      // Check content type of response to help with debugging
-      const contentType = response.headers.get('content-type');
-      console.log('Response content type:', contentType);
-      
-      // If not JSON, handle differently
-      if (!contentType || !contentType.includes('application/json')) {
-        const text = await response.text();
-        console.error('Non-JSON response received:', text.substring(0, 500));
-        throw new Error(`Invalid response: Expected JSON but got ${contentType || 'unknown'}`);
-      }
-      
-      try {
-        const data = await response.json();
-        
-        if (!response.ok) {
-          throw new Error(`${response.status} - ${data.message || data.error || data.detail || response.statusText}`);
-        }
-        
-        return data;
-      } catch (jsonError) {
-        console.error('JSON parse error:', jsonError);
-        
-        if (jsonError.message.includes('Unexpected end of JSON input')) {
-          // Try to get the raw response again to see what's happening
-          const retryText = await response.clone().text().catch(() => 'Could not read response');
-          console.error('Raw response that caused JSON error:', retryText.substring(0, 500));
-          throw new Error(`JSON parse error: ${jsonError.message}. Check API endpoint configuration.`);
-        }
-        
-        throw jsonError;
-      }
+      console.log('Klaviyo connection test successful');
+      return response;
     } catch (error) {
       console.error("Klaviyo connection test failed:", error);
       throw error;
@@ -221,21 +200,131 @@ export class KlaviyoApiClient {
     try {
       // Add delay to respect rate limits (3 per second, 60 per minute)
       await new Promise(resolve => setTimeout(resolve, 1000));
-      return await this.fetch(`/flows/${flowId}/actions`);
-    } catch (error) {
-      console.error(`Error fetching actions for flow ${flowId}:`, error);
-      throw error;
+      
+      // Validate flow ID format (should be alphanumeric)
+      if (!/^[a-zA-Z0-9]+$/.test(flowId)) {
+        console.warn(`[Klaviyo] Invalid flow ID format: ${flowId}. Flow ID should be alphanumeric.`);
+        return { data: [] };
+      }
+
+      const response = await this.fetch(`/flows/${flowId}/flow-actions/`, {
+        headers: {
+          'Authorization': `Klaviyo-API-Key ${this.apiKey}`,
+          'revision': '2023-10-15', // Updated to latest revision
+          'Content-Type': 'application/json'
+        }
+      });
+
+      if (!response || !response.data) {
+        console.warn(`[Klaviyo] No flow actions found for flow ID: ${flowId}`);
+        return { data: [] };
+      }
+
+      // Transform the response to match the expected format
+      return {
+        data: response.data.map((action: any) => ({
+          id: action.id,
+          type: action.type,
+          attributes: {
+            name: action.attributes?.name || 'Unnamed Action',
+            action_type: action.attributes?.action_type || 'unknown',
+            created: action.attributes?.created || new Date().toISOString(),
+            updated: action.attributes?.updated || new Date().toISOString()
+          }
+        }))
+      };
+    } catch (error: any) {
+      console.error(`[Klaviyo] Error fetching actions for flow ${flowId}:`, error);
+      
+      // Provide specific error message for 404 errors
+      if (error.response?.status === 404 || (error.message && error.message.includes('404'))) {
+        console.warn(`[Klaviyo] Flow not found (ID: ${flowId}) — it may have been deleted or the ID is incorrect`);
+      }
+      
+      // Return empty data array instead of throwing to prevent sync process from crashing
+      console.warn(`[Klaviyo] Returning empty result for flow ${flowId} due to error`);
+      return { data: [] };
     }
   }
   
   async getFlowMessages(flowActionId: string) {
     try {
+      // Validate action ID format (should be alphanumeric)
+      if (!flowActionId || !/^[a-zA-Z0-9]+$/.test(flowActionId)) {
+        const reason = "Invalid action ID format";
+        console.warn(`[Klaviyo] Skipping flow action ${flowActionId}: ${reason}`);
+        this.failedFlows.push({ flowActionId, reason });
+        return { data: [] };
+      }
+      
       // Add delay to respect rate limits (3 per second, 60 per minute)
       await new Promise(resolve => setTimeout(resolve, 1000));
-      return await this.fetch(`/flow-actions/${flowActionId}/messages`);
-    } catch (error) {
-      console.error(`Error fetching messages for flow action ${flowActionId}:`, error);
-      throw error;
+      
+      // Use the new API endpoint format with include parameter
+      const response = await this.fetch<any>(`/flow-actions/${flowActionId}?include=flow-message`, {
+        headers: {
+          'Accept': 'application/vnd.api+json',
+          'revision': '2023-10-15',
+        }
+      });
+      
+      // Check if we have included flow-message objects
+      if (response && response.included && Array.isArray(response.included)) {
+        // Extract only the flow-message objects from the included array
+        const flowMessages = response.included.filter((item: any) => 
+          item && item.type === 'flow-message'
+        );
+        
+        console.log(`[Klaviyo] Successfully extracted ${flowMessages.length} messages for flow action ${flowActionId}`);
+        
+        // Return in the format expected by the rest of the application
+        return {
+          data: flowMessages.map((message: any) => ({
+            id: message.id,
+            type: message.type,
+            attributes: message.attributes || {}
+          }))
+        };
+      } else {
+        // Missing included array - record as a failure but don't log stack trace
+        const reason = "No flow messages found in response";
+        console.warn(`[Klaviyo] Skipping flow action ${flowActionId}: ${reason}`);
+        this.failedFlows.push({ flowActionId, reason });
+        return { data: [] };
+      }
+    } catch (error: any) {
+      // Determine reason based on error type
+      let reason = "Unknown error";
+      let status = 'unknown';
+      
+      if (error.response?.status === 404 || (error.message && error.message.includes('404'))) {
+        reason = "Action not found (404)";
+        status = 404;
+      } else if (error.response?.status === 401 || error.response?.status === 403 || 
+                (error.message && (error.message.includes('401') || error.message.includes('403')))) {
+        reason = "Authentication or permission error";
+        status = error.response?.status || (error.message.includes('401') ? 401 : 403);
+      } else if (error.response?.status === 429 || (error.message && error.message.includes('429'))) {
+        reason = "Rate limit exceeded";
+        status = 429;
+      } else if (error.message) {
+        // Use error message but keep it concise
+        reason = error.message.split('\n')[0].substring(0, 100);
+      }
+      
+      // Log a simplified warning instead of full stack trace
+      console.warn(`[Klaviyo] Skipping flow action ${flowActionId}: ${reason}`);
+      
+      // Track the failure
+      this.failedFlows.push({ 
+        flowActionId, 
+        reason,
+        status,
+        timestamp: new Date().toISOString()
+      });
+      
+      // Return empty data array instead of throwing to prevent sync process from crashing
+      return { data: [] };
     }
   }
   

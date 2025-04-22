@@ -101,19 +101,48 @@ interface KlaviyoMetricAggregateResponse {
 export async function syncKlaviyoToAirtable() {
   try {
     console.log('Starting Klaviyo to Airtable sync...');
-    const klaviyoClient = new KlaviyoApiClient({ apiKey: process.env.KLAVIYO_API_KEY || '' });
-    const airtableClient = new AirtableApiClient({ 
-      apiKey: process.env.AIRTABLE_API_KEY || '', 
-      baseId: process.env.AIRTABLE_BASE_ID || '' 
+    
+    // Validate environment variables
+    const klaviyoApiKey = import.meta.env.VITE_KLAVIYO_API_KEY;
+    const airtableApiKey = import.meta.env.VITE_AIRTABLE_API_KEY;
+    const airtableBaseId = import.meta.env.VITE_AIRTABLE_BASE_ID;
+
+    console.log('Environment variables:', {
+      hasKlaviyoKey: !!klaviyoApiKey,
+      hasAirtableKey: !!airtableApiKey,
+      hasAirtableBaseId: !!airtableBaseId
     });
 
+    if (!klaviyoApiKey || !airtableApiKey || !airtableBaseId) {
+      throw new Error('Missing required environment variables. Please check your .env file.');
+    }
+
+    const klaviyoClient = new KlaviyoApiClient({ apiKey: klaviyoApiKey });
+    const airtableClient = new AirtableApiClient({ 
+      apiKey: airtableApiKey, 
+      baseId: airtableBaseId 
+    });
+
+    // Test connections
+    console.log('Testing Klaviyo connection...');
+    await klaviyoClient.testConnection();
+    console.log('Klaviyo connection successful');
+
+    console.log('Testing Airtable connection...');
+    await airtableClient.testConnection();
+    console.log('Airtable connection successful');
+
     // Get all flows from Klaviyo
+    console.log('Fetching flows from Klaviyo...');
     const flowsResponse = await klaviyoClient.getFlows() as KlaviyoApiResponse<KlaviyoFlow>;
     const flows = flowsResponse.data;
+    console.log(`Found ${flows.length} flows`);
 
     // Get all metrics from Klaviyo
+    console.log('Fetching metrics from Klaviyo...');
     const metricsResponse = await klaviyoClient.getMetrics() as KlaviyoApiResponse<KlaviyoMetric>;
     const metrics = metricsResponse.data;
+    console.log(`Found ${metrics.length} metrics`);
 
     // Transform flows for Airtable
     const transformedFlows: Array<{ fields: Record<string, any> }> = [];
@@ -121,9 +150,12 @@ export async function syncKlaviyoToAirtable() {
 
     for (const flow of flows) {
       try {
+        console.log(`Processing flow ${flow.id} (${flow.attributes?.name || 'Unnamed'})...`);
+        
         // Get actions for this flow
         const actionsResponse = await klaviyoClient.getFlowActions(flow.id) as KlaviyoApiResponse<any>;
         const actions = actionsResponse.data;
+        console.log(`Found ${actions.length} actions for flow ${flow.id}`);
 
         // Get messages for each action
         const messages: KlaviyoMessage[] = [];
@@ -131,9 +163,11 @@ export async function syncKlaviyoToAirtable() {
           const messagesResponse = await klaviyoClient.getFlowMessages(action.id) as KlaviyoApiResponse<KlaviyoMessage>;
           messages.push(...messagesResponse.data);
         }
+        console.log(`Found ${messages.length} messages for flow ${flow.id}`);
 
         // Get metrics for this flow
         const flowMetrics = metrics.filter(m => m.attributes?.name?.includes(flow.id));
+        console.log(`Found ${flowMetrics.length} metrics for flow ${flow.id}`);
 
         // Calculate metrics for the current period
         const currentPayload = {
@@ -144,6 +178,7 @@ export async function syncKlaviyoToAirtable() {
           filter: `greater_or_equal(datetime,2024-01-01),less_or_equal(datetime,2024-12-31)`
         };
 
+        console.log('Fetching current period metrics...');
         const currentMetricsResponse = await klaviyoClient.queryMetricAggregate(currentPayload) as KlaviyoMetricAggregateResponse;
         const currentMetrics = currentMetricsResponse.data.attributes.data;
 
@@ -156,6 +191,7 @@ export async function syncKlaviyoToAirtable() {
           filter: `greater_or_equal(datetime,2023-01-01),less_or_equal(datetime,2023-12-31)`
         };
 
+        console.log('Fetching previous period metrics...');
         const prevMetricsResponse = await klaviyoClient.queryMetricAggregate(prevPayload) as KlaviyoMetricAggregateResponse;
         const prevMetrics = prevMetricsResponse.data.attributes.data;
 
@@ -182,13 +218,14 @@ export async function syncKlaviyoToAirtable() {
             'Metric Count': flowMetrics.length
           }
         });
+        console.log(`Successfully processed flow ${flow.id}`);
       } catch (error) {
-        console.warn(`Error processing flow ${flow.id}:`, error);
+        console.error(`Error processing flow ${flow.id}:`, error);
         flowErrors.push({
           flowId: flow.id,
           error: error instanceof Error ? error.message : 'Unknown error'
         });
-        continue; // Skip this flow and continue with the next one
+        continue;
       }
     }
 
@@ -197,12 +234,15 @@ export async function syncKlaviyoToAirtable() {
       console.warn('Errors occurred while processing some flows:', flowErrors);
     }
 
-    console.log('flows to create', transformedFlows.length);
-    console.log('flows to update', 0);
+    console.log(`Preparing to create ${transformedFlows.length} records in Airtable...`);
 
     // Create records in Airtable
     if (transformedFlows.length > 0) {
-      await airtableClient.createRecords('Flows', transformedFlows);
+      console.log('Creating records in Airtable...');
+      const result = await airtableClient.createRecords('Flows', transformedFlows);
+      console.log(`Successfully created ${result.records?.length || 0} records in Airtable`);
+    } else {
+      console.warn('No records to create in Airtable');
     }
 
     console.log('Sync completed successfully');

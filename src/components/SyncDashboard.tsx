@@ -28,6 +28,7 @@ const SyncDashboard = ({ klaviyoApiKey, airtableApiKey, airtableBaseId }: SyncDa
   const [isTestingKlaviyo, setIsTestingKlaviyo] = useState(false);
   const [lastSyncTime, setLastSyncTime] = useState<Date | null>(null);
   const [logs, setLogs] = useState<LogEntry[]>([]);
+  const [syncStatus, setSyncStatus] = useState<string>('Never Synced');
 
   const addLog = (message: string, type: 'info' | 'success' | 'error' | 'warning') => {
     const newLog: LogEntry = {
@@ -86,51 +87,57 @@ const SyncDashboard = ({ klaviyoApiKey, airtableApiKey, airtableBaseId }: SyncDa
   };
 
   const handleSync = async () => {
-    if (!klaviyoApiKey) {
-      toast.error("Please enter your Klaviyo API Key before syncing");
-      return;
-    }
-
-    if (!airtableApiKey || !airtableBaseId) {
-      toast.error("Please configure your Airtable API Key and Base ID before syncing");
-      return;
-    }
-
-    setIsSyncing(true);
-    addLog("Starting Klaviyo to Airtable sync...", "info");
-
     try {
-      const klaviyoClient = new KlaviyoApiClient({ apiKey: klaviyoApiKey });
-      const airtableClient = new AirtableApiClient({ 
-        apiKey: airtableApiKey, 
-        baseId: airtableBaseId 
-      });
+      setIsSyncing(true);
+      setSyncStatus('Syncing...');
+      addLog("Starting sync operation...", "info");
 
-      addLog("Verifying Klaviyo API connection...", "info");
-      await klaviyoClient.testConnection();
-      addLog("Klaviyo API connection verified", "success");
-
-      addLog("Verifying Airtable API connection...", "info");
-      await airtableClient.testConnection();
-      addLog("Airtable API connection verified", "success");
-
-      addLog("Fetching data from Klaviyo...", "info");
-      
-      await syncKlaviyoToAirtable(klaviyoApiKey, airtableApiKey, airtableBaseId);
-      
-      setLastSyncTime(new Date());
-      addLog("Sync complete! All data has been successfully transferred to Airtable.", "success");
-      toast.success("Sync completed successfully");
-    } catch (error) {
-      console.error("Sync error:", error);
-      
-      if (error instanceof Error) {
-        addLog(`Sync failed: ${error.message}`, "error");
-        toast.error(`Sync failed: ${error.message}`);
-      } else {
-        addLog("Sync failed: Unknown error", "error");
-        toast.error("Sync failed. Check logs for details.");
+      // Validate input values
+      if (!klaviyoApiKey || !airtableApiKey || !airtableBaseId) {
+        const missingVars = [];
+        if (!klaviyoApiKey) missingVars.push('Klaviyo API Key');
+        if (!airtableApiKey) missingVars.push('Airtable API Key');
+        if (!airtableBaseId) missingVars.push('Airtable Base ID');
+        
+        const errorMessage = `Missing required values: ${missingVars.join(', ')}`;
+        console.error(errorMessage);
+        addLog(errorMessage, "error");
+        throw new Error(errorMessage);
       }
+
+      const response = await fetch('/api/sync', {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+        },
+        body: JSON.stringify({
+          klaviyoApiKey,
+          airtableApiKey,
+          airtableBaseId,
+        }),
+      });
+      
+      if (!response.ok) {
+        throw new Error(`HTTP error! status: ${response.status}`);
+      }
+      
+      const data = await response.json();
+      
+      if (data.success) {
+        setSyncStatus('Sync completed successfully');
+        setLastSyncTime(new Date());
+        addLog("Sync completed successfully", "success");
+        toast.success("Sync completed successfully");
+      } else {
+        setSyncStatus(`Sync failed: ${data.error}`);
+        addLog(`Sync failed: ${data.error}`, "error");
+        toast.error(`Sync failed: ${data.error}`);
+      }
+    } catch (error) {
+      const errorMessage = error instanceof Error ? error.message : 'Unknown error';
+      setSyncStatus(`Sync failed: ${errorMessage}`);
+      addLog(`Sync failed: ${errorMessage}`, "error");
+      toast.error(`Sync failed: ${errorMessage}`);
     } finally {
       setIsSyncing(false);
     }
@@ -143,7 +150,7 @@ const SyncDashboard = ({ klaviyoApiKey, airtableApiKey, airtableBaseId }: SyncDa
       </Badge>;
     }
     
-    if (!lastSyncTime) {
+    if (syncStatus === 'Never Synced') {
       return <Badge variant="outline" className="bg-gray-50 text-gray-700 border-gray-300">Never Synced</Badge>;
     }
     
